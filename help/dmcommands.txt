@@ -1,20 +1,34 @@
 # DM-only COMMANDS
 
-- sql/[SQL]: run some arbitrary SQL command
-- join/[roomid]: make the bot join a room
+# COMBATANTS
+- catk/[tgt]: make the current combatant attack
+- cuse/[item]: make the current combatant use an item
 - patk/[pid]/[tgt]: make a player attack
-- matk/[tgt]: make the current combatant attack
-- unassigned/[items/abilities]: view unassigned things
+- ptoc/[player]: make a combatant from a player
+- mtoc/[monster]: make a combatant from a monster
+- atk=/[combatant]/[attack]: set the attack dice of a combatant
+- init=/[combatant]/[value]: modify initiative for a combatant
+- hp{=}/[combatant]/[value]: set the HP of a combatant
+- newcombat/[name]/[attack dice]/[max HP]/[AC]: make a new combatant
+
+# ENCOUNTERS
+- encounter/begin: begin an encounter, automatically rolling initiative
+- encounter/end: end an encounter
+- set_current_combatant/[combatant]: set the current combatant
+- nextturn: change the current combatant to the next in initiative order
+
+# PLAYERS
 - pinv/[pid]: view a player's inventory
 - pabis/[pid]: view a player's abilities
-- mabis/[monster]: view a monster's abilities
-- mtoc/[monster]: make a combatant from a monster
-- set_current_combatant/[combatant]: set the current combatant
 - puse/[pid]/[item]: make a player use an item
-- cuse/[item]: make the current combatant use an item
+
+# MONSTERS
+- mabis/[monster]: view a monster's abilities
+
+# ARBITRARY
+- sql/[SQL]: run some arbitrary SQL command
+- join/[roomid]: make the bot join a room
+- unassigned/[items/abilities]: view unassigned things
 - loadmons: load the SRD into the database
 - loaddata/[path]: load some JSON into the database
-- newcombat/[name]/[attack dice]/[max HP]/[AC]: make a new combatant
-- atk=/[combatant]/[attack]: set the attack dice of a combatant
-- hp{=}/[combatant]/[value]: set the HP of a combatant
 

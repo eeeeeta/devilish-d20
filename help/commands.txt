@@ -11,14 +11,14 @@
 # COMBAT
 - combatants: list combatants
 - attack/[combatant]: attack someone
-- use/[ability]: use an ability (equipping weapons are abilities)
+- use/[ability ID]: use an ability (equipping weapons are abilities)
 - cdesc/[combatant]: describe a combatant
 
 # ITEMS
 - inventory: view your items
-- use/[ability]: use an ability (which items usually provide)
+- use/[ability ID]: use an ability (which items usually provide)
 - idesc/[item]: describe an item
 
 # ABILITIES
 - abilities: view your abilities
-- adesc/[ability]: describe an ability
+- adesc/[ability ID]: describe an ability

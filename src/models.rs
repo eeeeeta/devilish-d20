@@ -44,7 +44,7 @@ pub struct Player {
     pub constitution: i32,
     pub wisdom: i32,
     pub charisma: i32,
-    pub initiative_bonus: Option<i32>
+    pub initiative_bonus: i32
 }
 #[derive(Insertable, Serialize, Deserialize)]
 #[table_name="players"]
@@ -62,7 +62,7 @@ pub struct NewPlayer {
     pub wisdom: i32,
     pub charisma: i32,
     #[serde(default)]
-    pub initiative_bonus: Option<i32>
+    pub initiative_bonus: i32
 }
 #[derive(Queryable)]
 pub struct Ability {
@@ -148,4 +148,5 @@ pub struct NewCombatant<'a> {
     pub cur_hp: i32,
     pub armor_class: i32,
     pub monster_id: Option<i32>,
+    pub player_id: Option<i32>,
 }

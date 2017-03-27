@@ -38,7 +38,7 @@ CREATE TABLE players (
        constitution INT NOT NULL,
        wisdom INT NOT NULL,
        charisma INT NOT NULL,
-       initiative_bonus INT
+       initiative_bonus INT NOT NULL DEFAULT 0
 );
 CREATE TABLE abilities (
        id SERIAL PRIMARY KEY,

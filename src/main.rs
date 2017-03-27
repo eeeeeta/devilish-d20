@@ -60,6 +60,27 @@ pub fn establish_connection() -> PgConnection {
         .expect(&format!("Error connecting to {}", database_url))
 }
 
+pub fn score_to_mod(score: i32) -> i64 {
+    match score {
+        1 => -5,
+        2...3 => -4,
+        4...5 => -3,
+        6...7 => -2,
+        8...9 => -1,
+        10...11 => 0,
+        12...13 => 1,
+        14...15 => 2,
+        16...17 => 3,
+        18...19 => 4,
+        20...21 => 5,
+        22...23 => 6,
+        24...25 => 7,
+        26...27 => 8,
+        28...29 => 9,
+        30 => 10,
+        _ => 0
+    }
+}
 struct Conn {
     client: MatrixClient,
     admin: String,
@@ -209,10 +230,10 @@ impl Conn {
         match perc {
             x if x > 100 => "radiating health",
             100 => "completely unscathed",
-            75...100 => "a trifle bashed up",
-            40...75 => "mildly bleeding",
-            20...40 => "heavily bleeding",
-            1...20 => "on the road to Deadsville",
+            75...99 => "a trifle bashed up",
+            40...74 => "mildly bleeding",
+            20...39 => "heavily bleeding",
+            1...19 => "on the road to Deadsville",
             _ => "slightly dead"
         }
     }
@@ -320,7 +341,22 @@ impl Conn {
             max_hp: mons.hit_points,
             cur_hp: mons.hit_points,
             armor_class: mons.armor_class,
-            monster_id: Some(mons.id)
+            monster_id: Some(mons.id),
+            player_id: None,
+        };
+        let res = diesel::insert(&comb).into(cdsl::combatants)
+            .get_result(&self.db)?;
+        Ok(res)
+    }
+    fn player_to_combatant(&self, p: &Player) -> Result<Combatant> {
+        let comb = NewCombatant {
+            name: &p.name,
+            attack: "1d1",
+            max_hp: p.hit_points,
+            cur_hp: p.hit_points,
+            armor_class: p.armor_class,
+            player_id: Some(p.id),
+            monster_id: None
         };
         let res = diesel::insert(&comb).into(cdsl::combatants)
             .get_result(&self.db)?;
@@ -357,14 +393,14 @@ impl Conn {
         Ok(mons)
     }
     fn query_ability(&mut self, id: &str) -> Result<Ability> {
-        let id = format!("%{}%", id.to_lowercase());
-        let item = adsl::abilities.filter(lower(adsl::name).like(id))
+        let id = id.parse::<i32>()?;
+        let item = adsl::abilities.filter(adsl::id.eq(id))
             .get_result::<Ability>(&self.db)?;
         Ok(item)
     }
     fn query_item(&mut self, id: &str) -> Result<Item> {
-        let id = format!("%{}%", id.to_lowercase());
-        let item = idsl::items.filter(lower(idsl::name).like(id))
+        let id = id.parse::<i32>()?;
+        let item = idsl::items.filter(idsl::id.eq(id))
             .get_result::<Item>(&self.db)?;
         Ok(item)
     }
@@ -374,11 +410,150 @@ impl Conn {
             .get_result::<Combatant>(&self.db)?;
         Ok(item)
     }
+    fn query_player(&mut self, id: &str) -> Result<Player> {
+        let id = format!("%{}%", id.to_lowercase());
+        let item = pdsl::players.filter(lower(pdsl::name).like(id))
+            .get_result::<Player>(&self.db)?;
+        Ok(item)
+    }
     fn get_current_combatant(&mut self) -> Result<Combatant> {
         let id = self.cur_combatant.ok_or("An encounter is not taking place.")?;
         let comb = cdsl::combatants.filter(cdsl::id.eq(id))
             .get_result::<Combatant>(&self.db)?;
         Ok(comb)
+    }
+    fn describe_turn_options(&mut self) -> Result<String> {
+        let cc = self.get_current_combatant()?;
+        let mut ret = "Abilities for the current combatant:\n\n".to_string();
+        let mut abis = vec![];
+        if let Some(pid) = cc.player_id {
+            abis = adsl::abilities.filter(adsl::player_id.eq(pid))
+                .get_results(&self.db)?;
+        }
+        else if let Some(mid) = cc.monster_id {
+            abis = adsl::abilities.filter(adsl::monster_id.eq(mid))
+                .get_results(&self.db)?;
+        };
+        if abis.len() > 0 {
+            ret += &self.print_abilities(&abis, true);
+        }
+        else {
+            ret += "[There don't seem to be any.]";
+        }
+        Ok(ret)
+    }
+    fn begin_encounter(&mut self) -> Result<String> {
+        let mut ret = "Encounter!\n".to_string();
+        let players = pdsl::players.order(pdsl::id.desc())
+            .load::<Player>(&self.db)?;
+        self.cur_combatant = None;
+        for p in players {
+            self.player_to_combatant(&p)?;
+        }
+        ret += &self.roll_initiative()?;
+        ret += "\n\n";
+        ret += &self.print_combatants()?;
+        let first = cdsl::combatants.order(cdsl::initiative.desc())
+            .limit(1)
+            .get_result::<Combatant>(&self.db)?;
+        ret += &format!("\n\nIt's now {}'s turn.\n", first.name);
+        self.cur_combatant = Some(first.id);
+        ret += &self.describe_turn_options()?;
+        Ok(ret)
+    }
+    fn end_encounter(&mut self) -> Result<String> {
+        diesel::delete(cdsl::combatants)
+            .execute(&self.db)?;
+        self.cur_combatant = None;
+        Ok("Encounter ended.".to_string())
+    }
+    fn advance_turn(&mut self) -> Result<String> {
+        let cc = self.cur_combatant.ok_or("It's nobody's turn!".to_string())?;
+        let res = cdsl::combatants.order(cdsl::initiative.desc())
+            .load::<Combatant>(&self.db)?;
+        let mut ret = None;
+        let mut last = -1i32;
+        for (i, c) in res.into_iter().enumerate() {
+            if i == 0 {
+                last = c.id;
+                ret = Some(c);
+            }
+            else if last == cc {
+                ret = Some(c);
+                break;
+            }
+            else {
+                last = c.id;
+            }
+        }
+        let ret = ret.ok_or("Something terrible has happened!".to_string())?;
+        self.cur_combatant = Some(ret.id);
+        Ok(format!("It's now {}'s turn.\n{}", ret.name, self.describe_turn_options()?))
+    }
+    fn roll_initiative(&mut self) -> Result<String> {
+        let res = cdsl::combatants.load::<Combatant>(&self.db)?;
+        let mut ret = "Rolling initiative...\n".to_string();
+        for c in res {
+            let initiative = if let Some(pid) = c.player_id {
+                let player = pdsl::players.filter(pdsl::id.eq(pid))
+                    .get_result::<Player>(&self.db)?;
+                let roll = self.roll_dice("1d20")?;
+                let result = roll + score_to_mod(player.dexterity) + (player.initiative_bonus as i64);
+                ret.push_str(&format!("\n{} (player): [roll {}] + [dexmod {}] + [itvmod {}] => [initiative {}]",
+                                      player.name,
+                                      roll,
+                                      score_to_mod(player.dexterity),
+                                      player.initiative_bonus,
+                                      result));
+                result
+            }
+            else if let Some(mid) = c.monster_id {
+                let mons = mdsl::monsters.filter(mdsl::id.eq(mid))
+                    .get_result::<Monster>(&self.db)?;
+                let roll = self.roll_dice("1d20")?;
+                let result = roll + score_to_mod(mons.dexterity);
+                ret.push_str(&format!("\n{} (monster): [roll {}] + [dexmod {}] => [initiative {}]",
+                                      mons.name,
+                                      roll,
+                                      score_to_mod(mons.dexterity),
+                                      result));
+                result
+            }
+            else {
+                let roll = self.roll_dice("1d20")?;
+                ret.push_str(&format!("\n{} (???): [roll {}] => [initiative {}]",
+                                      c.name,
+                                      roll,
+                                      roll));
+                roll
+            };
+            diesel::update(cdsl::combatants.filter(cdsl::id.eq(c.id)))
+                .set(cdsl::initiative.eq(initiative as i32))
+                .execute(&self.db)?;
+        }
+        Ok(ret)
+    }
+    fn check(&mut self, player: &Player, axiom: &str) -> Result<String> {
+        let axiom = match &axiom.to_lowercase() as &_ {
+            "str" | "strength" => player.strength,
+            "dex" | "dexterity" => player.dexterity,
+            "wis" | "wisdom" => player.wisdom,
+            "int" | "intelligence" => player.intelligence,
+            "cha" | "charisma" => player.charisma,
+            "con" | "constitution" => player.constitution,
+            _ => bail!("Unknown player attribute")
+        };
+        let md = score_to_mod(axiom);
+        let roll = self.roll_dice("1d20")?;
+        if roll == 1 {
+            Ok("CRITICAL FAILURE! (rolled a natural 1)".into())
+        }
+        else if roll == 20 {
+            Ok("GREAT SUCCESS. (rolled a natural 20)".into())
+        }
+        else {
+            Ok(format!("[roll {}] + [modifier {}] => result {}", roll, md, roll + md))
+        }
     }
     fn attack(&mut self, from: &Combatant, to: &Combatant) -> Result<String> {
         let mut ret = String::new();
@@ -431,6 +606,11 @@ impl Conn {
                     .execute(&self.db);
                 self.msg(to, &format!("Result: {:?}", res))?;
             },
+            &[x @ "chk", what] | &[x @ "check", what] | &["pchk", x, what] => {
+                let player = self.authenticate_nick_or_dm(x, nick)?;
+                let st = self.check(&player, what)?;
+                self.msg(&to, &st)?;
+            }
             &[x @ "atk", tgt] | &[x @ "attack", tgt] | &["patk", x, tgt] => {
                 let player = self.authenticate_nick_or_dm(x, nick)?;
                 let comb = self.get_current_combatant()?;
@@ -441,7 +621,7 @@ impl Conn {
                 let st = self.attack(&comb, &tgt)?;
                 self.msg(&to, &st)?;
             },
-            &["matk", tgt] => {
+            &["catk", tgt] => {
                 let comb = self.get_current_combatant()?;
                 let tgt = self.query_combatant(tgt)?;
                 let st = self.attack(&comb, &tgt)?;
@@ -472,6 +652,31 @@ impl Conn {
                 let st = self.print_player_abilities(player.id)?;
                 self.msg(&to, &st)?;
             },
+            &["encounter", "begin"] => {
+                self.check_admin(nick)?;
+                let st = self.begin_encounter()?;
+                self.msg(&to, &st)?;
+            },
+            &["encounter", "end"] => {
+                self.check_admin(nick)?;
+                let st = self.end_encounter()?;
+                self.msg(&to, &st)?;
+            },
+            &["nextturn"] => {
+                self.check_admin(nick)?;
+                let st = self.advance_turn()?;
+                self.msg(&to, &st)?;
+            },
+            &["init=", id, val] => {
+                self.check_admin(nick)?;
+                let val = val.parse::<i32>()?;
+                let comb = self.query_combatant(id)?;
+                diesel::update(cdsl::combatants.filter(cdsl::id.eq(comb.id)))
+                    .set(cdsl::initiative.eq(val))
+                    .execute(&self.db)?;
+                let st = self.print_combatant(&comb, true);
+                self.msg(&to, &st)?;
+            },
             &["mabis", id] => {
                 let mons = self.query_monster(id)?;
                 self.msg(to, &format!("Abilities for a(n) {}:", mons.name))?;
@@ -483,6 +688,12 @@ impl Conn {
             &["mtoc", id] => {
                 let mons = self.query_monster(id)?;
                 let comb = self.monster_to_combatant(&mons)?;
+                let st = self.print_combatant(&comb, true);
+                self.msg(&to, &st)?;
+            },
+            &["ptoc", id] => {
+                let player = self.query_player(id)?;
+                let comb = self.player_to_combatant(&player)?;
                 let st = self.print_combatant(&comb, true);
                 self.msg(&to, &st)?;
             },
@@ -513,9 +724,9 @@ impl Conn {
                 self.msg(&to, "Done.")?;
             },
             &[x @ "use", id] | &["puse", x, id] => {
-                let id = format!("%{}%", id.to_lowercase());
+                let id = id.parse::<i32>()?;
                 let player = self.authenticate_nick_or_dm(x, nick)?;
-                let abi = adsl::abilities.filter(lower(adsl::name).like(id))
+                let abi = adsl::abilities.filter(adsl::id.eq(id))
                     .filter(adsl::player_id.eq(player.id))
                     .get_result::<Ability>(&self.db)?;
                 if abi.uses_left == 0 {
@@ -545,10 +756,10 @@ impl Conn {
             },
             &["cuse", id] => {
                 self.check_admin(&nick)?;
-                let id = format!("%{}%", id.to_lowercase());
+                let id = id.parse::<i32>()?;
                 let comb = self.get_current_combatant()?;
                 let mons_id = comb.monster_id.ok_or("The current combatant isn't a monster.")?;
-                let abi = adsl::abilities.filter(lower(adsl::name).like(id))
+                let abi = adsl::abilities.filter(adsl::id.eq(id))
                     .filter(adsl::monster_id.eq(mons_id))
                     .get_result::<Ability>(&self.db)?;
                 let mut ret = format!("{} uses {}!\n", comb.name, abi.name);
@@ -632,7 +843,8 @@ impl Conn {
                     max_hp: max_hp,
                     cur_hp: max_hp,
                     armor_class: armor_class,
-                    monster_id: None
+                    monster_id: None,
+                    player_id: None
                 };
                 let x = format!("Result: {:?}", diesel::insert(&nm).into(schema::combatants::table)
                                 .execute(&self.db));
@@ -675,6 +887,7 @@ impl Conn {
             },
             &["quit"] => {
                 self.check_admin(nick)?;
+                self.end_encounter()?;
                 self.msg(to, &format!("So long, and thanks for all the fish!"))?;
                 panic!("They asked us to quit, so we did.");
             },
@@ -686,7 +899,7 @@ impl Conn {
         println!("<{}> to {}: {}", nick, to, msg);
         if nick == self.client.user_id() { return; }
         if msg.len() < 1 { return; }
-        if msg.chars().nth(0).unwrap() == '@' {
+        if msg.chars().nth(0).unwrap() == ',' {
             msg.remove(0);
             let args = msg.split("/").collect::<Vec<&str>>();
             if let Err(e) = self.on_command(&nick, &to, &args) {
