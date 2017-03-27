@@ -5,3 +5,4 @@ Example: @attack/aboleth.
 Help topics ("@help/[topic]"):
 - commands: What commands can you use with me?
 - dmcommands: What aren't you lowly players allowed to do?
+- source: Where do I come from?
