@@ -1,0 +1,20 @@
+# DM-only COMMANDS
+
+- sql/[SQL]: run some arbitrary SQL command
+- join/[roomid]: make the bot join a room
+- patk/[pid]/[tgt]: make a player attack
+- matk/[tgt]: make the current combatant attack
+- unassigned/[items/abilities]: view unassigned things
+- pinv/[pid]: view a player's inventory
+- pabis/[pid]: view a player's abilities
+- mabis/[monster]: view a monster's abilities
+- mtoc/[monster]: make a combatant from a monster
+- set_current_combatant/[combatant]: set the current combatant
+- puse/[pid]/[item]: make a player use an item
+- cuse/[item]: make the current combatant use an item
+- loadmons: load the SRD into the database
+- loaddata/[path]: load some JSON into the database
+- newcombat/[name]/[attack dice]/[max HP]/[AC]: make a new combatant
+- atk=/[combatant]/[attack]: set the attack dice of a combatant
+- hp{=}/[combatant]/[value]: set the HP of a combatant
+

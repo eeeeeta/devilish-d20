@@ -1,0 +1,7 @@
+Hello. I'm devilish_d20, a crappy bot for playing D&D.
+I take commands that start with @, and are separated with slashes ('/').
+Example: @attack/aboleth.
+
+Help topics ("@help/[topic]"):
+- commands: What commands can you use with me?
+- dmcommands: What aren't you lowly players allowed to do?

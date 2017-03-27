@@ -1,0 +1,24 @@
+# GENERAL
+- whoami: find out who you are (for existential moments)
+- ping: check if the bot is still alive
+- findmons/[monster]: find a monster
+- players: list players
+
+# DICE
+- roll/[dicespec]: roll dice
+- reroll: reroll the last dice
+
+# COMBAT
+- combatants: list combatants
+- attack/[combatant]: attack someone
+- use/[ability]: use an ability (equipping weapons are abilities)
+- cdesc/[combatant]: describe a combatant
+
+# ITEMS
+- inventory: view your items
+- use/[ability]: use an ability (which items usually provide)
+- idesc/[item]: describe an item
+
+# ABILITIES
+- abilities: view your abilities
+- adesc/[ability]: describe an ability

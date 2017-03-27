@@ -1,0 +1,15 @@
+[package]
+name = "devilish-d20"
+version = "0.1.0"
+authors = ["eeeeeta <eeeeeta@users.noreply.github.com>"]
+
+[dependencies]
+glitch-in-the-matrix = { path = "../glitch-in-the-matrix", version = "*" }
+rouler = "0.1.3"
+diesel = { version = "0.11.0", features = ["postgres"] }
+diesel_codegen = { version = "0.11.0", features = ["postgres"] }
+dotenv = "0.8.0"
+serde_json = "0.9"
+serde = "0.9"
+serde_derive = "0.9"
+error-chain = "0.10"
