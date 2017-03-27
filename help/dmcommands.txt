@@ -17,10 +17,19 @@
 - set_current_combatant/[combatant]: set the current combatant
 - nextturn: change the current combatant to the next in initiative order
 
+# ROOMS
+- room/enter/[room]: enter a room
+- room/describe/[room]: describe a room
+
+# ABILITIES
+- recover_uses: recover all ability uses
+
 # PLAYERS
 - pinv/[pid]: view a player's inventory
 - pabis/[pid]: view a player's abilities
 - puse/[pid]/[item]: make a player use an item
+- ppickup/[item ID]: make a player pick up an item
+- pdrop/[item ID]: make a player drop an item
 
 # MONSTERS
 - mabis/[monster]: view a monster's abilities

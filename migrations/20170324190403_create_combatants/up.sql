@@ -23,7 +23,8 @@ CREATE TABLE monsters (
        constitution INT NOT NULL,
        wisdom INT NOT NULL,
        charisma INT NOT NULL,
-       challenge_rating VARCHAR NOT NULL
+       challenge_rating VARCHAR NOT NULL,
+       room_id INT[] NOT NULL
 );
 CREATE TABLE players (
        id SERIAL PRIMARY KEY,
@@ -57,11 +58,17 @@ CREATE TABLE items (
        name VARCHAR NOT NULL,
        descrip VARCHAR NOT NULL,
        qty INT NOT NULL,
-       player_id INT
+       player_id INT,
+       room_id INT
 );
 CREATE TABLE rooms (
        id SERIAL PRIMARY KEY,
        shortid VARCHAR NOT NULL,
        name VARCHAR NOT NULL,
        descrip VARCHAR NOT NULL
+);
+CREATE TABLE props (
+       id SERIAL PRIMARY KEY,
+       name VARCHAR NOT NULL,
+       value VARCHAR NOT NULL
 );

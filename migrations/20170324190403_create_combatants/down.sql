@@ -5,3 +5,4 @@ DROP TABLE abilities;
 DROP TABLE rooms;
 DROP TABLE players;
 DROP TABLE items;
+DROP TABLE props;

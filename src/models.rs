@@ -1,4 +1,4 @@
-use super::schema::{combatants, monsters, abilities, items, rooms, players};
+use super::schema::{combatants, monsters, abilities, items, rooms, players, props};
 
 #[derive(Queryable)]
 pub struct Monster {
@@ -14,6 +14,7 @@ pub struct Monster {
     pub wisdom: i32,
     pub charisma: i32,
     pub challenge_rating: String,
+    pub room_id: Vec<i32>,
 }
 #[derive(Insertable, Serialize, Deserialize)]
 #[table_name="monsters"]
@@ -29,6 +30,8 @@ pub struct NewMonster {
     pub wisdom: i32,
     pub charisma: i32,
     pub challenge_rating: String,
+    #[serde(default)]
+    pub room_id: Vec<i32>,
 }
 #[derive(Queryable)]
 pub struct Player {
@@ -115,6 +118,7 @@ pub struct Item {
     pub descrip: String,
     pub qty: i32,
     pub player_id: Option<i32>,
+    pub room_id: Option<i32>,
 }
 #[derive(Insertable, Serialize, Deserialize)]
 #[table_name="items"]
@@ -124,6 +128,8 @@ pub struct NewItem {
     pub qty: i32,
     #[serde(default)]
     pub player_id: Option<i32>,
+    #[serde(default)]
+    pub room_id: Option<i32>
 }
 #[derive(Queryable, Clone)]
 pub struct Combatant {
@@ -149,4 +155,16 @@ pub struct NewCombatant<'a> {
     pub armor_class: i32,
     pub monster_id: Option<i32>,
     pub player_id: Option<i32>,
+}
+#[derive(Serialize, Deserialize, Queryable)]
+pub struct Property {
+    pub id: i32,
+    pub name: String,
+    pub value: String
+}
+#[derive(Insertable)]
+#[table_name="props"]
+pub struct NewProperty<'a> {
+    name: &'a str,
+    value: &'a str
 }

@@ -2,7 +2,6 @@
 - whoami: find out who you are (for existential moments)
 - ping: check if the bot is still alive
 - findmons/[monster]: find a monster
-- players: list players
 
 # DICE
 - roll/[dicespec]: roll dice
@@ -17,8 +16,14 @@
 # ITEMS
 - inventory: view your items
 - use/[ability ID]: use an ability (which items usually provide)
-- idesc/[item]: describe an item
+- idesc/[item ID]: describe an item
+- pickup/[item ID]: pick up an item
+- drop/[item ID]: drop an item
 
 # ABILITIES
 - abilities: view your abilities
 - adesc/[ability ID]: describe an ability
+
+# ENVIRONMENT
+- look: observe the environment
+- players: list players

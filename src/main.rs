@@ -12,6 +12,7 @@ extern crate std_unicode;
 
 use diesel::prelude::*;
 use diesel::pg::PgConnection;
+use diesel::ArrayExpressionMethods;
 use dotenv::dotenv;
 use std::env;
 use rouler::Roller;
@@ -48,8 +49,10 @@ use schema::monsters::dsl as mdsl;
 use schema::abilities::dsl as adsl;
 use schema::players::dsl as pdsl;
 use schema::rooms::dsl as rdsl;
+use schema::props::dsl as odsl;
 use schema::items::dsl as idsl;
 use models::*;
+use models::Room;
 
 sql_function!(lower, lower_t, (a: diesel::types::VarChar) -> diesel::types::VarChar);
 
@@ -86,7 +89,8 @@ struct Conn {
     admin: String,
     db: PgConnection,
     last_roll: Option<String>,
-    cur_combatant: Option<i32>
+    cur_combatant: Option<i32>,
+    cur_room: Option<i32>
 }
 
 impl Conn {
@@ -129,7 +133,8 @@ impl Conn {
                 uses: -1,
                 uses_left: -1
             });
-            items.push(NewItem { name, descrip, qty, player_id });
+            let room_id = None;
+            items.push(NewItem { name, descrip, qty, player_id, room_id });
         }
         let n_items = diesel::insert(&items).into(schema::items::table)
             .execute(&self.db)?;
@@ -159,8 +164,9 @@ impl Conn {
             let SrdMonster { name, typ, armor_class, hit_points, strength, intelligence, dexterity,
                              constitution, wisdom, charisma, challenge_rating, special_abilities,
                              actions } = m;
+            let room_id = vec![];
             let newmons = NewMonster { name, typ, armor_class, hit_points, strength, intelligence, dexterity,
-                         constitution, wisdom, charisma, challenge_rating };
+                         constitution, wisdom, charisma, challenge_rating, room_id };
             let newmons: Monster = diesel::insert(&newmons).into(schema::monsters::table)
                 .get_result(&self.db)?;
             let special_abilities = special_abilities.into_iter()
@@ -209,18 +215,25 @@ impl Conn {
         Ok(res.total())
     }
     fn print_player(&mut self, p: &Player) -> String {
-        format!("#{}: {} the {}. HP {} AC {}\nStr {} Int {} Dex {} Con {} Wis {} Cha {}",
+        format!("#{}: {} the {} HP {} AC {}\nStr {} ({}) Int {} ({}) Dex {} ({}) Con {} ({}) Wis {} ({}) Cha {} ({})",
                 p.id,
                 p.name,
                 p.typ,
                 p.hit_points,
                 p.armor_class,
                 p.strength,
+                score_to_mod(p.strength),
                 p.intelligence,
+                score_to_mod(p.intelligence),
                 p.dexterity,
+                score_to_mod(p.dexterity),
                 p.constitution,
+                score_to_mod(p.constitution),
                 p.wisdom,
-                p.charisma)
+                score_to_mod(p.wisdom),
+                p.charisma,
+                score_to_mod(p.charisma)
+        )
     }
     fn print_monster(&mut self, m: &Monster) -> String {
         format!("* {}, a {}. HP {} AC {}", m.name, m.typ, m.hit_points, m.armor_class)
@@ -362,6 +375,74 @@ impl Conn {
             .get_result(&self.db)?;
         Ok(res)
     }
+    fn print_room(&mut self, room: &Room) -> Result<String> {
+        let mut ret = format!("* {}\n{}", room.name, room.descrip);
+        let items = idsl::items.filter(idsl::room_id.eq(room.id))
+            .load::<Item>(&self.db)?;
+        if items.len() > 0 {
+            ret += "\n* There are the following items in this room:";
+            for i in items {
+                ret += "\n";
+                ret += &self.print_item(&i, true);
+            }
+        }
+        Ok(ret)
+    }
+    fn pick_up(&mut self, player: &Player, item: &Item) -> Result<String> {
+        let room = self.get_current_room()?;
+        if item.room_id.is_none() || item.room_id.unwrap() != room.id {
+            bail!("That item isn't in the current room.");
+        }
+        if item.player_id.is_some() {
+            bail!("Another player has that item (this error shouldn't occur)");
+        }
+        let room_id: Option<i32> = None;
+        diesel::update(idsl::items.filter(idsl::id.eq(item.id)))
+            .set((idsl::player_id.eq(player.id), idsl::room_id.eq(room_id)))
+            .execute(&self.db)?;
+        let mut ret = format!("* {} picks up {}.\n", player.name, item.name);
+        ret += &self.print_item(item, true);
+        let mut ret = format!("* The item adds the following abilities:\n");
+        let abis = diesel::update(adsl::abilities.filter(adsl::item_id.eq(item.id)))
+            .set(adsl::player_id.eq(player.id))
+            .get_results(&self.db)?;
+        ret += &self.print_abilities(&abis, true);
+        Ok(ret)
+    }
+    fn drop(&mut self, player: &Player, item: &Item) -> Result<String> {
+        let room = self.get_current_room()?;
+        if item.player_id.is_none() || item.player_id.unwrap() != player.id {
+            bail!("You don't own that item.");
+        }
+        let player_id: Option<i32> = None;
+        diesel::update(idsl::items.filter(idsl::id.eq(item.id)))
+            .set((idsl::player_id.eq(player_id), idsl::room_id.eq(room.id)))
+            .execute(&self.db)?;
+        diesel::update(adsl::abilities.filter(adsl::item_id.eq(item.id)))
+            .set(adsl::player_id.eq(player_id))
+            .execute(&self.db)?;
+        Ok(format!("* {} drops {}.\n", player.name, item.name))
+    }
+    fn get_room_monsters(&mut self, room: &Room) -> Result<Vec<Monster>> {
+        let mons = mdsl::monsters.filter(mdsl::room_id.contains(vec![room.id]))
+            .load::<Monster>(&self.db)?;
+        Ok(mons)
+    }
+    fn enter_room(&mut self, room: &Room) -> Result<String> {
+        self.end_encounter()?;
+        let mut ret = self.print_room(room)?;
+        let mons = self.get_room_monsters(room)?;
+        if mons.len() > 0 {
+            ret += "\n* There are the following monsters in this room:";
+            for m in mons {
+                let comb = self.monster_to_combatant(&m)?;
+                ret += "\n";
+                ret += &self.print_combatant(&comb, true);
+            }
+        }
+        self.cur_room = Some(room.id);
+        Ok(ret)
+    }
     fn authenticate_nick(&mut self, nick: &str) -> Result<Player> {
         Ok(pdsl::players.filter(pdsl::nick.eq(nick))
             .get_result(&self.db)?)
@@ -416,11 +497,22 @@ impl Conn {
             .get_result::<Player>(&self.db)?;
         Ok(item)
     }
+    fn query_room(&mut self, id: &str) -> Result<Room> {
+        let item = rdsl::rooms.filter(lower(rdsl::shortid).eq(id))
+            .get_result::<Room>(&self.db)?;
+        Ok(item)
+    }
     fn get_current_combatant(&mut self) -> Result<Combatant> {
         let id = self.cur_combatant.ok_or("An encounter is not taking place.")?;
         let comb = cdsl::combatants.filter(cdsl::id.eq(id))
             .get_result::<Combatant>(&self.db)?;
         Ok(comb)
+    }
+    fn get_current_room(&mut self) -> Result<Room> {
+        let id = self.cur_room.ok_or("We're in limbo!")?;
+        let room = rdsl::rooms.filter(rdsl::id.eq(id))
+            .get_result::<Room>(&self.db)?;
+        Ok(room)
     }
     fn describe_turn_options(&mut self) -> Result<String> {
         let cc = self.get_current_combatant()?;
@@ -532,6 +624,12 @@ impl Conn {
                 .execute(&self.db)?;
         }
         Ok(ret)
+    }
+    fn recover_uses(&mut self) -> Result<usize> {
+        let changed = diesel::update(adsl::abilities)
+            .set(adsl::uses_left.eq(adsl::uses))
+            .execute(&self.db)?;
+        Ok(changed)
     }
     fn check(&mut self, player: &Player, axiom: &str) -> Result<String> {
         let axiom = match &axiom.to_lowercase() as &_ {
@@ -652,6 +750,40 @@ impl Conn {
                 let st = self.print_player_abilities(player.id)?;
                 self.msg(&to, &st)?;
             },
+            &["room", "enter", room] => {
+                self.check_admin(nick)?;
+                let rm = self.query_room(room)?;
+                let st = self.enter_room(&rm)?;
+                self.msg(&to, &st)?;
+            },
+            &["room", "describe", room] => {
+                self.check_admin(nick)?;
+                let rm = self.query_room(room)?;
+                let st = self.print_room(&rm)?;
+                self.msg(&to, &st)?;
+            },
+            &["look"] => {
+                let rm = self.get_current_room()?;
+                let st = self.print_room(&rm)?;
+                self.msg(&to, &st)?;
+            },
+            &[x @ "pickup", item] | &["ppickup", x, item] => {
+                let player = self.authenticate_nick_or_dm(x, nick)?;
+                let item = self.query_item(item)?;
+                let st = self.pick_up(&player, &item)?;
+                self.msg(&to, &st)?;
+            },
+            &[x @ "drop", item] | &["pdrop", x, item] => {
+                let player = self.authenticate_nick_or_dm(x, nick)?;
+                let item = self.query_item(item)?;
+                let st = self.drop(&player, &item)?;
+                self.msg(&to, &st)?;
+            },
+            &["recover_uses"] => {
+                self.check_admin(nick)?;
+                let st = format!("{} abilities changed.", self.recover_uses()?);
+                self.msg(&to, &st)?;
+            }
             &["encounter", "begin"] => {
                 self.check_admin(nick)?;
                 let st = self.begin_encounter()?;
@@ -951,7 +1083,8 @@ fn main() {
         last_roll: None,
         db: connection,
         admin: admin,
-        cur_combatant: None
+        cur_combatant: None,
+        cur_room: None
     };
     loop {
         conn.main().unwrap();
