@@ -49,8 +49,8 @@ use schema::monsters::dsl as mdsl;
 use schema::abilities::dsl as adsl;
 use schema::players::dsl as pdsl;
 use schema::rooms::dsl as rdsl;
-use schema::props::dsl as odsl;
 use schema::items::dsl as idsl;
+use schema::spells::dsl as sdsl;
 use models::*;
 use models::Room;
 
@@ -111,6 +111,34 @@ impl Conn {
         buf_reader.read_to_string(&mut contents)?;
         Ok(contents)
     }
+    fn load_spells(&mut self, to: &str) -> Result<usize> {
+        self.msg(&to, "Reading spells from srd_spells.json...")?;
+        let mons = File::open("srd_spells.json")?;
+        let mut buf_reader = BufReader::new(mons);
+        let mut contents = String::new();
+        buf_reader.read_to_string(&mut contents)?;
+        self.msg(&to, "Parsing spells...")?;
+        let mons: Vec<NewSpell> = serde_json::from_str(&contents)?;
+        self.msg(&to, &format!("{} spells in file.", mons.len()))?;
+        let n_spells = diesel::insert(&mons)
+            .into(schema::spells::table)
+            .execute(&self.db)?;
+        Ok(n_spells)
+    }
+    fn print_spell(&mut self, spell: &Spell, short: bool) -> String {
+        let mut ret = format!("#{}: {} ({})",
+                              spell.id,
+                              spell.name,
+                              spell.typ);
+        if !short {
+            ret += &format!("\nrange {} | time {} | level {}\n\n{}",
+                            spell.range,
+                            spell.casting_time,
+                            spell.level,
+                            spell.descrip);
+        }
+        ret
+    }
     fn load_datafile(&mut self, to: &str, path: &str) -> Result<()> {
         self.msg(&to, &format!("Reading datafile from {}...", path))?;
         let df = File::open(path)?;
@@ -157,7 +185,7 @@ impl Conn {
         buf_reader.read_to_string(&mut contents)?;
         self.msg(&to, "Parsing monsters...")?;
         let mons: Vec<SrdMonster> = serde_json::from_str(&contents)?;
-        self.msg(&to, &format!("{} monsters loaded", mons.len()))?;
+        self.msg(&to, &format!("{} monsters in file.", mons.len()))?;
         self.msg(&to, "Inserting monsters into database...")?;
         let mut inserted = 0;
         for m in mons {
@@ -375,6 +403,24 @@ impl Conn {
             .get_result(&self.db)?;
         Ok(res)
     }
+    fn spell_to_player_ability(&mut self, p: &Player, s: &Spell) -> Result<Ability> {
+        let abi = NewAbility {
+            name: format!("Spell: {} ({})", s.name, s.typ),
+            descrip: format!("range {} | time {}\n\n{}",
+                             s.range,
+                             s.casting_time,
+                             s.descrip),
+            uses: -1,
+            damage_dice: None,
+            attack_bonus: None,
+            uses_left: -1,
+            monster_id: None,
+            player_id: Some(p.id)
+        };
+        let res = diesel::insert(&abi).into(adsl::abilities)
+            .get_result(&self.db)?;
+        Ok(res)
+    }
     fn print_room(&mut self, room: &Room) -> Result<String> {
         let mut ret = format!("* {}\n{}", room.name, room.descrip);
         let items = idsl::items.filter(idsl::room_id.eq(room.id))
@@ -495,6 +541,12 @@ impl Conn {
         let id = format!("%{}%", id.to_lowercase());
         let item = pdsl::players.filter(lower(pdsl::name).like(id))
             .get_result::<Player>(&self.db)?;
+        Ok(item)
+    }
+    fn query_spell(&mut self, id: &str) -> Result<Spell> {
+        let id = format!("%{}%", id.to_lowercase());
+        let item = sdsl::spells.filter(lower(sdsl::name).like(id))
+            .get_result::<Spell>(&self.db)?;
         Ok(item)
     }
     fn query_room(&mut self, id: &str) -> Result<Room> {
@@ -767,6 +819,13 @@ impl Conn {
                 let st = self.print_room(&rm)?;
                 self.msg(&to, &st)?;
             },
+            &["teachspell", x, spell] => {
+                let player = self.authenticate_nick_or_dm(x, nick)?;
+                let spell = self.query_spell(spell)?;
+                let abi = self.spell_to_player_ability(&player, &spell)?;
+                let st = self.print_ability(&abi, false);
+                self.msg(&to, &st)?;
+            },
             &[x @ "pickup", item] | &["ppickup", x, item] => {
                 let player = self.authenticate_nick_or_dm(x, nick)?;
                 let item = self.query_item(item)?;
@@ -850,6 +909,11 @@ impl Conn {
                 }
                 self.msg(&to, &st)?;
             },
+            &["sdesc", id] | &["describe", "spell", id] => {
+                let sp = self.query_spell(id)?;
+                let st = self.print_spell(&sp, false);
+                self.msg(&to, &st)?;
+            },
             &["set_current_combatant", id] => {
                 let id = id.parse::<i32>()?;
                 self.cur_combatant = Some(id);
@@ -927,6 +991,28 @@ impl Conn {
                     st.push_str(&x);
                 }
                 self.msg(&to, &st)?;
+            },
+            &["findspells", id] => {
+                let id = format!("%{}%", id.to_lowercase());
+                let mons = sdsl::spells.filter(lower(sdsl::name).like(id))
+                    .load::<Spell>(&self.db)?;
+                if mons.len() == 0 {
+                    bail!("No results found.");
+                }
+                let mut st = String::new();
+                for m in mons {
+                    if st != "" {
+                        st.push_str("\n");
+                    }
+                    let x = self.print_spell(&m, true);
+                    st.push_str(&x);
+                }
+                self.msg(&to, &st)?;
+            },
+            &["loadspells"] => {
+                self.check_admin(nick)?;
+                let res = self.load_spells(to)?;
+                self.msg(to, &format!("{} spells loaded.", res))?;
             },
             &["loadmons"] => {
                 self.check_admin(nick)?;

@@ -67,8 +67,15 @@ CREATE TABLE rooms (
        name VARCHAR NOT NULL,
        descrip VARCHAR NOT NULL
 );
-CREATE TABLE props (
+CREATE TABLE spells (
        id SERIAL PRIMARY KEY,
        name VARCHAR NOT NULL,
-       value VARCHAR NOT NULL
+       typ VARCHAR NOT NULL,
+       ritual BOOLEAN NOT NULL,
+       level VARCHAR NOT NULL,
+       school VARCHAR NOT NULL,
+       casting_time VARCHAR NOT NULL,
+       range VARCHAR NOT NULL,
+       duration VARCHAR NOT NULL,
+       descrip VARCHAR NOT NULL
 );

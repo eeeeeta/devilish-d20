@@ -1,5 +1,8 @@
-use super::schema::{combatants, monsters, abilities, items, rooms, players, props};
+use super::schema::{combatants, monsters, abilities, items, rooms, players, props, spells};
 
+pub fn default_qty() -> i32 {
+    1
+}
 #[derive(Queryable)]
 pub struct Monster {
     pub id: i32,
@@ -125,6 +128,7 @@ pub struct Item {
 pub struct NewItem {
     pub name: String,
     pub descrip: String,
+    #[serde(default = "default_qty")]
     pub qty: i32,
     #[serde(default)]
     pub player_id: Option<i32>,
@@ -167,4 +171,33 @@ pub struct Property {
 pub struct NewProperty<'a> {
     name: &'a str,
     value: &'a str
+}
+#[derive(Queryable)]
+pub struct Spell {
+    pub id: i32,
+    pub name: String,
+    pub typ: String,
+    pub ritual: bool,
+    pub level: String,
+    pub school: String,
+    pub casting_time: String,
+    pub range: String,
+    pub duration: String,
+    pub descrip: String
+}
+#[derive(Insertable, Serialize, Deserialize)]
+#[table_name="spells"]
+pub struct NewSpell {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub typ: String,
+    pub ritual: bool,
+    pub level: String,
+    #[serde(default)]
+    pub school: String,
+    pub casting_time: String,
+    pub range: String,
+    pub duration: String,
+    #[serde(rename = "description", default)]
+    pub descrip: String
 }
