@@ -95,7 +95,7 @@ struct Conn {
 
 impl Conn {
     fn msg(&mut self, to: &str, msg: &str) -> Result<()> {
-        let m = Message::Text { body: msg.into() };
+        let m = Message::Notice { body: msg.into(), formatted_body: Some(msg.replace("\n", "<br/>")), format: Some("org.matrix.custom.html".into()) };
         self.client.send(to, m)?;
         ::std::thread::sleep(::std::time::Duration::from_millis(250));
         Ok(())
@@ -126,7 +126,7 @@ impl Conn {
         Ok(n_spells)
     }
     fn print_spell(&mut self, spell: &Spell, short: bool) -> String {
-        let mut ret = format!("#{}: {} ({})",
+        let mut ret = format!("#{}: <b>{}</b> ({})",
                               spell.id,
                               spell.name,
                               spell.typ);
@@ -243,7 +243,7 @@ impl Conn {
         Ok(res.total())
     }
     fn print_player(&mut self, p: &Player) -> String {
-        format!("#{}: {} the {} HP {} AC {}\nStr {} ({}) Int {} ({}) Dex {} ({}) Con {} ({}) Wis {} ({}) Cha {} ({})",
+        format!("#{}: <b>{}</b> the {} HP {} AC {}\nStr {} <i>({})</i> Int {} <i>({})</i> Dex {} <i>({})</i> Con {} <i>({})</i> Wis {} <i>({})</i> Cha {} <i>({})</i>",
                 p.id,
                 p.name,
                 p.typ,
@@ -264,28 +264,28 @@ impl Conn {
         )
     }
     fn print_monster(&mut self, m: &Monster) -> String {
-        format!("* {}, a {}. HP {} AC {}", m.name, m.typ, m.hit_points, m.armor_class)
+        format!("* <b>{}</b>, a {}. HP {} AC {}", m.name, m.typ, m.hit_points, m.armor_class)
     }
     fn wound_descriptions(c: i32, m: i32) -> &'static str {
         let perc = ((c as f64 / m as f64) * 100.0f64) as i32;
         match perc {
-            x if x > 100 => "radiating health",
-            100 => "completely unscathed",
-            75...99 => "a trifle bashed up",
-            40...74 => "mildly bleeding",
-            20...39 => "heavily bleeding",
-            1...19 => "on the road to Deadsville",
-            _ => "slightly dead"
+            x if x > 100 => "<font color=\"green\">radiating health</font>",
+            100 => "<font color=\"green\">completely unscathed</font>",
+            75...99 => "<font color=\"blue\">a trifle bashed up</font>",
+            40...74 => "<font color=\"orange\">mildly bleeding</font>",
+            20...39 => "<font color=\"red\">heavily bleeding</font>",
+            1...19 => "<font color=\"darkred\">on the road to Deadsville</font>",
+            _ => "<font color=\"darkred\">slightly dead</font>"
         }
     }
     fn print_combatant(&mut self, c: &Combatant, short: bool) -> String {
         let mut msg = String::new();
         if c.monster_id.is_some() {
-            msg = format!("* {} is {} [initiative: {}]",
+            msg = format!("* <b>{}</b> is <i>{}</i> [initiative: {}]",
                           c.name, Self::wound_descriptions(c.cur_hp, c.max_hp), c.initiative);
         }
         else {
-            msg = format!("* {} - HP {}/{} [initiative: {}]",
+            msg = format!("* <b>{}</b> - HP {}/{} [initiative: {}]",
                           c.name, c.cur_hp, c.max_hp, c.initiative);
         }
         if !short {
@@ -311,7 +311,7 @@ impl Conn {
     }
     fn print_item(&mut self, i: &Item, short: bool) -> String {
         let qty = if i.qty == -1 { "∞".into() } else { i.qty.to_string() };
-        let mut ret = format!("#{}: {}x {}", i.id, qty, i.name);
+        let mut ret = format!("#{}: {}x <b>{}</b>", i.id, qty, i.name);
         if !short {
             for line in i.descrip.lines() {
                 ret.push_str("\n");
@@ -328,7 +328,7 @@ impl Conn {
             format!(" [+{} to hit]", ab)
         } else { "".into() };
         let uses = if a.uses_left == -1 { "∞".into() } else { a.uses_left.to_string() };
-        let mut ret = format!("#{}: {}x {}{}{}", a.id, uses, a.name, dmg, atkb);
+        let mut ret = format!("#{}: {}x <b>{}</b>{}{}", a.id, uses, a.name, dmg, atkb);
         if !short {
             for line in a.descrip.lines() {
                 ret.push_str("\n");
@@ -702,20 +702,20 @@ impl Conn {
             Ok("GREAT SUCCESS. (rolled a natural 20)".into())
         }
         else {
-            Ok(format!("[roll {}] + [modifier {}] => result {}", roll, md, roll + md))
+            Ok(format!("<i>[roll {}] + [modifier {}]</i> => result <b>{}</b>", roll, md, roll + md))
         }
     }
     fn attack(&mut self, from: &Combatant, to: &Combatant) -> Result<String> {
         let mut ret = String::new();
-        ret.push_str(&format!("{} [to-hit: {}] attacks {} [AC: {}]!\n",
+        ret.push_str(&format!("<b>{}</b> [to-hit: {}] attacks <b>{}</b> [AC: {}]!\n",
                               from.name,
                               from.attack_bonus,
                               to.name,
                               to.armor_class));
         let target = to.armor_class - from.attack_bonus;
-        ret.push_str(&format!("Checking AC: dice roll required = {}\n", target));
+        ret.push_str(&format!("Checking AC: dice roll required = <b>{}</b>\n", target));
         let roll = self.roll_dice("1d20")?;
-        ret.push_str(&format!("rolling 1d20: result = {}\n\n", roll));
+        ret.push_str(&format!("rolling 1d20: result = <b>{}</b>\n\n", roll));
         if (roll < target as i64 && roll != 20) || roll == 1 {
             if roll == 1 {
                 ret.push_str(&format!("CRITICAL FAILURE!"));
@@ -726,10 +726,10 @@ impl Conn {
             return Ok(ret);
         }
         let mut dmg = self.roll_dice(&from.attack)?;
-        ret.push_str(&format!("Dealing {} damage: result = {}\n", from.attack, dmg));
+        ret.push_str(&format!("Dealing {} damage: result = <b>{}</b>\n", from.attack, dmg));
         if roll == 20 {
             dmg += self.roll_dice(&from.attack)?;
-            ret.push_str(&format!("Critical hit! Dealing extra damage. New damage = {}\n", dmg));
+            ret.push_str(&format!("Critical hit! Dealing extra damage. New damage = <b>{}</b>\n", dmg));
         }
         let to = diesel::update(cdsl::combatants.filter(cdsl::id.eq(to.id)))
             .set(cdsl::cur_hp.eq(to.cur_hp - dmg as i32))
@@ -1135,7 +1135,7 @@ impl Conn {
             for event in room.timeline.events {
                 match event.content {
                     Content::RoomMessage(m) => {
-                        if let Message::Text { body } = m {
+                        if let Message::Text { body, .. } = m {
                             self.on_new_msg(&event.sender, &rid, body);
                         }
                     },
