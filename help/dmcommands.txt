@@ -24,6 +24,10 @@
 # ABILITIES
 - recover_uses: recover all ability uses
 
+# SPELLS
+- loadspells: load spells from the SRD
+- teachspell/[pid]/[spell name]: teach a player a spell
+
 # PLAYERS
 - pinv/[pid]: view a player's inventory
 - pabis/[pid]: view a player's abilities

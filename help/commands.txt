@@ -24,6 +24,10 @@
 - abilities: view your abilities
 - adesc/[ability ID]: describe an ability
 
+# SPELLS
+- findspells/[spell name]: find a spell by its name
+- sdesc/[spell name]: describe a spell
+
 # ENVIRONMENT
 - look: observe the environment
 - players: list players
