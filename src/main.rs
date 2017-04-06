@@ -9,7 +9,12 @@ extern crate serde;
 extern crate serde_json;
 extern crate dotenv;
 extern crate std_unicode;
+#[macro_use] extern crate ketos;
 
+use ketos::{ForeignValue, Interpreter};
+use ketos::Value as KetosValue;
+use ketos::Error as KetosError;
+type KetosResult<T> = ::std::result::Result<T, KetosError>;
 use diesel::prelude::*;
 use diesel::pg::PgConnection;
 use diesel::ArrayExpressionMethods;
@@ -24,6 +29,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::prelude::*;
 use std_unicode::str::UnicodeStr;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 pub mod errors {
     error_chain! {
@@ -36,6 +43,17 @@ pub mod errors {
             Io(::std::io::Error);
             Json(::serde_json::Error);
         }
+        errors {
+            Ketos(d: String) {
+                display("Error in Ketos code: {}", d)
+            }
+        }
+    }
+    use ketos::Error as KError;
+    impl From<KError> for Error {
+        fn from(e: KError) -> Error {
+            Error::from_kind(ErrorKind::Ketos(format!("{:?}", e)))
+        }
     }
 }
 use errors::*;
@@ -43,6 +61,7 @@ pub mod schema;
 pub mod models;
 pub mod import;
 pub mod matrix;
+pub mod scripts;
 use import::{SrdMonster, Weapon, MonsterAbility, Datafile};
 use schema::combatants::dsl as cdsl;
 use schema::monsters::dsl as mdsl;
@@ -62,7 +81,14 @@ pub fn establish_connection() -> PgConnection {
     PgConnection::establish(&database_url)
         .expect(&format!("Error connecting to {}", database_url))
 }
-
+pub fn roll_dice(spec: &str) -> Result<i64> {
+    panic::catch_unwind(|| {
+        Roller::new(spec).total()
+    }).map_err(|_| "Invalid dicespec".into())
+}
+pub fn k_roll_dice(spec: &str) -> KetosResult<i64> {
+    roll_dice(spec).map_err(|e| (Box::new(e) as Box<::std::error::Error>).into())
+}
 pub fn score_to_mod(score: i32) -> i64 {
     match score {
         1 => -5,
@@ -85,9 +111,10 @@ pub fn score_to_mod(score: i32) -> i64 {
     }
 }
 struct Conn {
-    client: MatrixClient,
+    client: Rc<RefCell<MatrixClient>>,
     admin: String,
-    db: PgConnection,
+    db: Rc<RefCell<PgConnection>>,
+    interp: Interpreter,
     last_roll: Option<String>,
     cur_combatant: Option<i32>,
     cur_room: Option<i32>
@@ -96,7 +123,7 @@ struct Conn {
 impl Conn {
     fn msg(&mut self, to: &str, msg: &str) -> Result<()> {
         let m = Message::Notice { body: msg.into(), formatted_body: Some(msg.replace("\n", "<br/>")), format: Some("org.matrix.custom.html".into()) };
-        self.client.send(to, m)?;
+        self.client.borrow_mut().send(to, m)?;
         ::std::thread::sleep(::std::time::Duration::from_millis(250));
         Ok(())
     }
@@ -122,7 +149,7 @@ impl Conn {
         self.msg(&to, &format!("{} spells in file.", mons.len()))?;
         let n_spells = diesel::insert(&mons)
             .into(schema::spells::table)
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         Ok(n_spells)
     }
     fn print_spell(&mut self, spell: &Spell, short: bool) -> String {
@@ -165,15 +192,15 @@ impl Conn {
             items.push(NewItem { name, descrip, qty, player_id, room_id });
         }
         let n_items = diesel::insert(&items).into(schema::items::table)
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         let n_rooms = diesel::insert(&rooms).into(schema::rooms::table)
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         let n_abilities = diesel::insert(&abilities).into(schema::abilities::table)
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         let n_players = diesel::insert(&players).into(schema::players::table)
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         let n_monsters = diesel::insert(&monsters).into(schema::monsters::table)
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         self.msg(&to, &format!("Inserted {} item(s), {} room(s), {} abilities, {} player(s) and {} monster(s).", n_items, n_rooms, n_abilities, n_players, n_monsters))?;
         Ok(())
     }
@@ -196,7 +223,7 @@ impl Conn {
             let newmons = NewMonster { name, typ, armor_class, hit_points, strength, intelligence, dexterity,
                          constitution, wisdom, charisma, challenge_rating, room_id };
             let newmons: Monster = diesel::insert(&newmons).into(schema::monsters::table)
-                .get_result(&self.db)?;
+                .get_result(&*self.db.borrow())?;
             let special_abilities = special_abilities.into_iter()
                 .map(|abi| {
                     let MonsterAbility { name, desc, damage_dice, attack_bonus } = abi;
@@ -228,22 +255,20 @@ impl Conn {
                 })
                 .collect::<Vec<_>>();
             diesel::insert(&special_abilities).into(schema::abilities::table)
-                .execute(&self.db)?;
+                .execute(&*self.db.borrow())?;
             diesel::insert(&actions).into(schema::abilities::table)
-                .execute(&self.db)?;
+                .execute(&*self.db.borrow())?;
             inserted += 1;
         }
         Ok(inserted)
     }
     fn roll_dice(&mut self, spec: &str) -> Result<i64> {
-        let res = panic::catch_unwind(|| {
-            Roller::new(spec)
-        }).map_err(|_| "Invalid dicespec".to_string())?;
+        let roll = roll_dice(spec)?;
         self.last_roll = Some(spec.into());
-        Ok(res.total())
+        Ok(roll)
     }
     fn print_player(&mut self, p: &Player) -> String {
-        format!("#{}: <b>{}</b> the {} HP {} AC {}\nStr {} <i>({})</i> Int {} <i>({})</i> Dex {} <i>({})</i> Con {} <i>({})</i> Wis {} <i>({})</i> Cha {} <i>({})</i>",
+        format!("#{}: <b>{}</b> the {} HP {} AC {}\nStr {} <i>({})</i> Int {} <i>({})</i> Dex {} <i>({})</i> Con {} <i>({})</i> Wis {} <i>({})</i> Cha {} <i>({})</i>{}",
                 p.id,
                 p.name,
                 p.typ,
@@ -260,7 +285,13 @@ impl Conn {
                 p.wisdom,
                 score_to_mod(p.wisdom),
                 p.charisma,
-                score_to_mod(p.charisma)
+                score_to_mod(p.charisma),
+                if p.buffs.len() < 1 {
+                    "".into()
+                }
+                else {
+                    format!("\nActive buffs: <b>{}</b>", p.buffs.join(", "))
+                }
         )
     }
     fn print_monster(&mut self, m: &Monster) -> String {
@@ -301,7 +332,7 @@ impl Conn {
         msg
     }
     fn print_combatants(&mut self) -> Result<String> {
-        let r = cdsl::combatants.order(cdsl::initiative.desc()).load::<Combatant>(&self.db)?;
+        let r = cdsl::combatants.order(cdsl::initiative.desc()).load::<Combatant>(&*self.db.borrow())?;
         let mut msg = format!("{} combatants active:", r.len());
         for c in r {
             msg.push_str("\n");
@@ -366,13 +397,13 @@ impl Conn {
     fn print_player_items(&mut self, pid: i32) -> Result<String> {
         let results = idsl::items.filter(idsl::player_id.eq(pid))
             .order(idsl::qty.desc())
-            .load::<Item>(&self.db)?;
+            .load::<Item>(&*self.db.borrow())?;
         Ok(self.print_items(&results, true))
     }
     fn print_player_abilities(&mut self, pid: i32) -> Result<String> {
         let results = adsl::abilities.filter(adsl::player_id.eq(pid))
             .order(adsl::uses_left.desc())
-            .load::<Ability>(&self.db)?;
+            .load::<Ability>(&*self.db.borrow())?;
         Ok(self.print_abilities(&results, true))
     }
     fn monster_to_combatant(&mut self, mons: &Monster) -> Result<Combatant> {
@@ -386,7 +417,7 @@ impl Conn {
             player_id: None,
         };
         let res = diesel::insert(&comb).into(cdsl::combatants)
-            .get_result(&self.db)?;
+            .get_result(&*self.db.borrow())?;
         Ok(res)
     }
     fn player_to_combatant(&self, p: &Player) -> Result<Combatant> {
@@ -400,7 +431,7 @@ impl Conn {
             monster_id: None
         };
         let res = diesel::insert(&comb).into(cdsl::combatants)
-            .get_result(&self.db)?;
+            .get_result(&*self.db.borrow())?;
         Ok(res)
     }
     fn spell_to_player_ability(&mut self, p: &Player, s: &Spell) -> Result<Ability> {
@@ -418,13 +449,13 @@ impl Conn {
             player_id: Some(p.id)
         };
         let res = diesel::insert(&abi).into(adsl::abilities)
-            .get_result(&self.db)?;
+            .get_result(&*self.db.borrow())?;
         Ok(res)
     }
     fn print_room(&mut self, room: &Room) -> Result<String> {
         let mut ret = format!("* {}\n{}", room.name, room.descrip);
         let items = idsl::items.filter(idsl::room_id.eq(room.id))
-            .load::<Item>(&self.db)?;
+            .load::<Item>(&*self.db.borrow())?;
         if items.len() > 0 {
             ret += "\n* There are the following items in this room:";
             for i in items {
@@ -445,13 +476,13 @@ impl Conn {
         let room_id: Option<i32> = None;
         diesel::update(idsl::items.filter(idsl::id.eq(item.id)))
             .set((idsl::player_id.eq(player.id), idsl::room_id.eq(room_id)))
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         let mut ret = format!("* {} picks up {}.\n", player.name, item.name);
         ret += &self.print_item(item, true);
         let mut ret = format!("* The item adds the following abilities:\n");
         let abis = diesel::update(adsl::abilities.filter(adsl::item_id.eq(item.id)))
             .set(adsl::player_id.eq(player.id))
-            .get_results(&self.db)?;
+            .get_results(&*self.db.borrow())?;
         ret += &self.print_abilities(&abis, true);
         Ok(ret)
     }
@@ -463,15 +494,15 @@ impl Conn {
         let player_id: Option<i32> = None;
         diesel::update(idsl::items.filter(idsl::id.eq(item.id)))
             .set((idsl::player_id.eq(player_id), idsl::room_id.eq(room.id)))
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         diesel::update(adsl::abilities.filter(adsl::item_id.eq(item.id)))
             .set(adsl::player_id.eq(player_id))
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         Ok(format!("* {} drops {}.\n", player.name, item.name))
     }
     fn get_room_monsters(&mut self, room: &Room) -> Result<Vec<Monster>> {
         let mons = mdsl::monsters.filter(mdsl::room_id.contains(vec![room.id]))
-            .load::<Monster>(&self.db)?;
+            .load::<Monster>(&*self.db.borrow())?;
         Ok(mons)
     }
     fn enter_room(&mut self, room: &Room) -> Result<String> {
@@ -491,14 +522,14 @@ impl Conn {
     }
     fn authenticate_nick(&mut self, nick: &str) -> Result<Player> {
         Ok(pdsl::players.filter(pdsl::nick.eq(nick))
-            .get_result(&self.db)?)
+            .get_result(&*self.db.borrow())?)
     }
     fn authenticate_nick_or_dm(&mut self, code: &str, nick: &str) -> Result<Player> {
         match code.parse::<i32>() {
             Ok(x) => {
                 self.check_admin(nick)?;
                 Ok(pdsl::players.filter(pdsl::id.eq(x))
-                   .get_result(&self.db)?)
+                   .get_result(&*self.db.borrow())?)
             },
             Err(_) => {
                 Ok(self.authenticate_nick(&nick)?)
@@ -516,54 +547,54 @@ impl Conn {
     fn query_monster(&mut self, q: &str) -> Result<Monster> {
         let q = format!("%{}%", q.to_lowercase());
         let mons = mdsl::monsters.filter(lower(mdsl::name).like(q))
-            .get_result::<Monster>(&self.db)?;
+            .get_result::<Monster>(&*self.db.borrow())?;
         Ok(mons)
     }
     fn query_ability(&mut self, id: &str) -> Result<Ability> {
         let id = id.parse::<i32>()?;
         let item = adsl::abilities.filter(adsl::id.eq(id))
-            .get_result::<Ability>(&self.db)?;
+            .get_result::<Ability>(&*self.db.borrow())?;
         Ok(item)
     }
     fn query_item(&mut self, id: &str) -> Result<Item> {
         let id = id.parse::<i32>()?;
         let item = idsl::items.filter(idsl::id.eq(id))
-            .get_result::<Item>(&self.db)?;
+            .get_result::<Item>(&*self.db.borrow())?;
         Ok(item)
     }
     fn query_combatant(&mut self, id: &str) -> Result<Combatant> {
         let id = format!("%{}%", id.to_lowercase());
         let item = cdsl::combatants.filter(lower(cdsl::name).like(id))
-            .get_result::<Combatant>(&self.db)?;
+            .get_result::<Combatant>(&*self.db.borrow())?;
         Ok(item)
     }
     fn query_player(&mut self, id: &str) -> Result<Player> {
         let id = format!("%{}%", id.to_lowercase());
         let item = pdsl::players.filter(lower(pdsl::name).like(id))
-            .get_result::<Player>(&self.db)?;
+            .get_result::<Player>(&*self.db.borrow())?;
         Ok(item)
     }
     fn query_spell(&mut self, id: &str) -> Result<Spell> {
         let id = format!("%{}%", id.to_lowercase());
         let item = sdsl::spells.filter(lower(sdsl::name).like(id))
-            .get_result::<Spell>(&self.db)?;
+            .get_result::<Spell>(&*self.db.borrow())?;
         Ok(item)
     }
     fn query_room(&mut self, id: &str) -> Result<Room> {
         let item = rdsl::rooms.filter(lower(rdsl::shortid).eq(id))
-            .get_result::<Room>(&self.db)?;
+            .get_result::<Room>(&*self.db.borrow())?;
         Ok(item)
     }
     fn get_current_combatant(&mut self) -> Result<Combatant> {
         let id = self.cur_combatant.ok_or("An encounter is not taking place.")?;
         let comb = cdsl::combatants.filter(cdsl::id.eq(id))
-            .get_result::<Combatant>(&self.db)?;
+            .get_result::<Combatant>(&*self.db.borrow())?;
         Ok(comb)
     }
     fn get_current_room(&mut self) -> Result<Room> {
         let id = self.cur_room.ok_or("We're in limbo!")?;
         let room = rdsl::rooms.filter(rdsl::id.eq(id))
-            .get_result::<Room>(&self.db)?;
+            .get_result::<Room>(&*self.db.borrow())?;
         Ok(room)
     }
     fn describe_turn_options(&mut self) -> Result<String> {
@@ -572,11 +603,11 @@ impl Conn {
         let mut abis = vec![];
         if let Some(pid) = cc.player_id {
             abis = adsl::abilities.filter(adsl::player_id.eq(pid))
-                .get_results(&self.db)?;
+                .get_results(&*self.db.borrow())?;
         }
         else if let Some(mid) = cc.monster_id {
             abis = adsl::abilities.filter(adsl::monster_id.eq(mid))
-                .get_results(&self.db)?;
+                .get_results(&*self.db.borrow())?;
         };
         if abis.len() > 0 {
             ret += &self.print_abilities(&abis, true);
@@ -589,7 +620,7 @@ impl Conn {
     fn begin_encounter(&mut self) -> Result<String> {
         let mut ret = "Encounter!\n".to_string();
         let players = pdsl::players.order(pdsl::id.desc())
-            .load::<Player>(&self.db)?;
+            .load::<Player>(&*self.db.borrow())?;
         self.cur_combatant = None;
         for p in players {
             self.player_to_combatant(&p)?;
@@ -599,7 +630,7 @@ impl Conn {
         ret += &self.print_combatants()?;
         let first = cdsl::combatants.order(cdsl::initiative.desc())
             .limit(1)
-            .get_result::<Combatant>(&self.db)?;
+            .get_result::<Combatant>(&*self.db.borrow())?;
         ret += &format!("\n\nIt's now {}'s turn.\n", first.name);
         self.cur_combatant = Some(first.id);
         ret += &self.describe_turn_options()?;
@@ -607,14 +638,14 @@ impl Conn {
     }
     fn end_encounter(&mut self) -> Result<String> {
         diesel::delete(cdsl::combatants)
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         self.cur_combatant = None;
         Ok("Encounter ended.".to_string())
     }
     fn advance_turn(&mut self) -> Result<String> {
         let cc = self.cur_combatant.ok_or("It's nobody's turn!".to_string())?;
         let res = cdsl::combatants.order(cdsl::initiative.desc())
-            .load::<Combatant>(&self.db)?;
+            .load::<Combatant>(&*self.db.borrow())?;
         let mut ret = None;
         let mut last = -1i32;
         for (i, c) in res.into_iter().enumerate() {
@@ -634,13 +665,18 @@ impl Conn {
         self.cur_combatant = Some(ret.id);
         Ok(format!("It's now {}'s turn.\n{}", ret.name, self.describe_turn_options()?))
     }
+    fn load_buff(&mut self, name: &str) -> Result<()> {
+        let path = format!("buffs/{}.ket", name);
+        self.interp.run_file(::std::path::Path::new(&path)).map_err(|e| self.interp.format_error(&e))?;
+        Ok(())
+    }
     fn roll_initiative(&mut self) -> Result<String> {
-        let res = cdsl::combatants.load::<Combatant>(&self.db)?;
+        let res = cdsl::combatants.load::<Combatant>(&*self.db.borrow())?;
         let mut ret = "Rolling initiative...\n".to_string();
         for c in res {
             let initiative = if let Some(pid) = c.player_id {
                 let player = pdsl::players.filter(pdsl::id.eq(pid))
-                    .get_result::<Player>(&self.db)?;
+                    .get_result::<Player>(&*self.db.borrow())?;
                 let roll = self.roll_dice("1d20")?;
                 let result = roll + score_to_mod(player.dexterity) + (player.initiative_bonus as i64);
                 ret.push_str(&format!("\n{} (player): [roll {}] + [dexmod {}] + [itvmod {}] => [initiative {}]",
@@ -653,7 +689,7 @@ impl Conn {
             }
             else if let Some(mid) = c.monster_id {
                 let mons = mdsl::monsters.filter(mdsl::id.eq(mid))
-                    .get_result::<Monster>(&self.db)?;
+                    .get_result::<Monster>(&*self.db.borrow())?;
                 let roll = self.roll_dice("1d20")?;
                 let result = roll + score_to_mod(mons.dexterity);
                 ret.push_str(&format!("\n{} (monster): [roll {}] + [dexmod {}] => [initiative {}]",
@@ -673,14 +709,14 @@ impl Conn {
             };
             diesel::update(cdsl::combatants.filter(cdsl::id.eq(c.id)))
                 .set(cdsl::initiative.eq(initiative as i32))
-                .execute(&self.db)?;
+                .execute(&*self.db.borrow())?;
         }
         Ok(ret)
     }
     fn recover_uses(&mut self) -> Result<usize> {
         let changed = diesel::update(adsl::abilities)
             .set(adsl::uses_left.eq(adsl::uses))
-            .execute(&self.db)?;
+            .execute(&*self.db.borrow())?;
         Ok(changed)
     }
     fn check(&mut self, player: &Player, axiom: &str) -> Result<String> {
@@ -733,7 +769,7 @@ impl Conn {
         }
         let to = diesel::update(cdsl::combatants.filter(cdsl::id.eq(to.id)))
             .set(cdsl::cur_hp.eq(to.cur_hp - dmg as i32))
-            .get_result::<Combatant>(&self.db)?;
+            .get_result::<Combatant>(&*self.db.borrow())?;
         ret.push_str(&format!("Opponent's state after attack:\n\n{}", self.print_combatant(&to, true)));
         Ok(ret)
     }
@@ -746,14 +782,14 @@ impl Conn {
             },
             &["join", roomid] => {
                 self.check_admin(nick)?;
-                self.client.join(roomid)?;
+                self.client.borrow_mut().join(roomid)?;
                 self.msg(roomid, &format!("{} asked me to join, so here I am.", nick))?;
                 self.msg(to, "Done.")?;
             },
             &["sql", query] => {
                 self.check_admin(nick)?;
                 let res = diesel::expression::dsl::sql::<diesel::types::Integer>(query)
-                    .execute(&self.db);
+                    .execute(&*self.db.borrow());
                 self.msg(to, &format!("Result: {:?}", res))?;
             },
             &[x @ "chk", what] | &[x @ "check", what] | &["pchk", x, what] => {
@@ -781,13 +817,13 @@ impl Conn {
                 self.check_admin(nick)?;
                 if x == "items" {
                     let res = idsl::items.filter(idsl::player_id.is_null())
-                        .load::<Item>(&self.db)?;
+                        .load::<Item>(&*self.db.borrow())?;
                     let st = self.print_items(&res, true);
                     self.msg(&to, &st)?;
                 }
                 else {
                     let res = adsl::abilities.filter(adsl::player_id.is_null())
-                        .load::<Ability>(&self.db)?;
+                        .load::<Ability>(&*self.db.borrow())?;
                     let st = self.print_abilities(&res, true);
                     self.msg(&to, &st)?;
                 }
@@ -801,6 +837,67 @@ impl Conn {
                 let player = self.authenticate_nick_or_dm(x, nick)?;
                 let st = self.print_player_abilities(player.id)?;
                 self.msg(&to, &st)?;
+            },
+            &["ketos", "eval", script] => {
+                self.check_admin(nick)?;
+                self.interp.run_code(script, None).map_err(|e| self.interp.format_error(&e))?;
+                let val = self.interp.call("custom", vec![
+                    to.into(),
+                ]).map_err(|e| self.interp.format_error(&e))?;
+                if let ketos::Value::Unit = val {
+                    /* how boring! let's not print anything */
+                }
+                else {
+                    let st = format!("Return value: {:?}", val);
+                    self.msg(&to, &st)?;
+                }
+            },
+            &["ketos", "player", player, script] => {
+                self.check_admin(nick)?;
+                let player = self.query_player(player)?;
+                self.interp.run_code(script, None).map_err(|e| self.interp.format_error(&e))?;
+                let val = self.interp.call("custom", vec![
+                    to.into(),
+                    player.id.into()
+                ]).map_err(|e| self.interp.format_error(&e))?;
+                if let ketos::Value::Unit = val {
+                    /* how boring! let's not print anything */
+                }
+                else {
+                    let st = format!("Return value: {:?}", val);
+                    self.msg(&to, &st)?;
+                }
+            },
+            &["buff", "add", player, name] => {
+                self.check_admin(nick)?;
+                let mut player = self.query_player(player)?;
+                self.load_buff(name)?;
+                self.interp.call("buff", vec![
+                    to.into(),
+                    player.id.into()
+                ]).map_err(|e| self.interp.format_error(&e))?;
+                player.buffs.push(name.into());
+                diesel::update(pdsl::players.filter(pdsl::id.eq(player.id)))
+                    .set(pdsl::buffs.eq(player.buffs))
+                    .execute(&*self.db.borrow())?;
+                self.msg(&to, "Buff applied.")?;
+            },
+            &["buff", "remove", player, name] => {
+                self.check_admin(nick)?;
+                let mut player = self.query_player(player)?;
+                if !player.buffs.contains(&name.into()) {
+                    bail!("No such buff is acting on that player at this time.");
+                }
+                self.load_buff(name)?;
+                self.interp.call("debuff", vec![
+                    to.into(),
+                    player.id.into()
+                ]).map_err(|e| self.interp.format_error(&e))?;
+                player.buffs.retain(|b| b != name);
+                diesel::update(pdsl::players.filter(pdsl::id.eq(player.id)))
+                    .set(pdsl::buffs.eq(player.buffs))
+                    .execute(&*self.db.borrow())?;
+                self.msg(&to, "Buff removed.")?;
             },
             &["room", "enter", room] => {
                 self.check_admin(nick)?;
@@ -864,7 +961,7 @@ impl Conn {
                 let comb = self.query_combatant(id)?;
                 diesel::update(cdsl::combatants.filter(cdsl::id.eq(comb.id)))
                     .set(cdsl::initiative.eq(val))
-                    .execute(&self.db)?;
+                    .execute(&*self.db.borrow())?;
                 let st = self.print_combatant(&comb, true);
                 self.msg(&to, &st)?;
             },
@@ -872,7 +969,7 @@ impl Conn {
                 let mons = self.query_monster(id)?;
                 self.msg(to, &format!("Abilities for a(n) {}:", mons.name))?;
                 let abis = adsl::abilities.filter(adsl::monster_id.eq(mons.id))
-                    .get_results::<Ability>(&self.db)?;
+                    .get_results::<Ability>(&*self.db.borrow())?;
                 let st = self.print_abilities(&abis, false);
                 self.msg(&to, &st)?;
             },
@@ -924,7 +1021,7 @@ impl Conn {
                 let player = self.authenticate_nick_or_dm(x, nick)?;
                 let abi = adsl::abilities.filter(adsl::id.eq(id))
                     .filter(adsl::player_id.eq(player.id))
-                    .get_result::<Ability>(&self.db)?;
+                    .get_result::<Ability>(&*self.db.borrow())?;
                 if abi.uses_left == 0 {
                     bail!("That ability has no uses left!");
                 }
@@ -934,19 +1031,19 @@ impl Conn {
                 if let Some(ref dice) = abi.damage_dice {
                     let comb = diesel::update(cdsl::combatants.filter(cdsl::player_id.eq(player.id)))
                         .set(cdsl::attack.eq(dice))
-                        .get_result::<Combatant>(&self.db)?;
+                        .get_result::<Combatant>(&*self.db.borrow())?;
                     ret.push_str(&format!("\n{}'s new attack: {}", comb.name, comb.attack));
                 }
                 if let Some(ab) = abi.attack_bonus {
                     let comb = diesel::update(cdsl::combatants.filter(cdsl::player_id.eq(player.id)))
                         .set(cdsl::attack_bonus.eq(ab))
-                        .get_result::<Combatant>(&self.db)?;
+                        .get_result::<Combatant>(&*self.db.borrow())?;
                     ret.push_str(&format!("\n{}'s new to hit bonus: {}", comb.name, comb.attack_bonus));
                 }
                 if abi.uses_left != -1 {
                     diesel::update(adsl::abilities.filter(adsl::id.eq(abi.id)))
                         .set(adsl::uses_left.eq(abi.uses_left - 1))
-                        .execute(&self.db)?;
+                        .execute(&*self.db.borrow())?;
                 }
                 self.msg(&to, &st)?;
             },
@@ -957,20 +1054,20 @@ impl Conn {
                 let mons_id = comb.monster_id.ok_or("The current combatant isn't a monster.")?;
                 let abi = adsl::abilities.filter(adsl::id.eq(id))
                     .filter(adsl::monster_id.eq(mons_id))
-                    .get_result::<Ability>(&self.db)?;
+                    .get_result::<Ability>(&*self.db.borrow())?;
                 let mut ret = format!("{} uses {}!\n", comb.name, abi.name);
                 let st = self.print_ability(&abi, false);
                 ret.push_str(&st);
                 if let Some(ref dice) = abi.damage_dice {
                     let comb = diesel::update(cdsl::combatants.filter(cdsl::id.eq(comb.id)))
                         .set(cdsl::attack.eq(dice))
-                        .get_result::<Combatant>(&self.db)?;
+                        .get_result::<Combatant>(&*self.db.borrow())?;
                     ret.push_str(&format!("\n{}'s new attack: {}", comb.name, comb.attack));
                 }
                 if let Some(ab) = abi.attack_bonus {
                     let comb = diesel::update(cdsl::combatants.filter(cdsl::id.eq(comb.id)))
                         .set(cdsl::attack_bonus.eq(ab))
-                        .get_result::<Combatant>(&self.db)?;
+                        .get_result::<Combatant>(&*self.db.borrow())?;
                     ret.push_str(&format!("\n{}'s new to hit bonus: {}", comb.name, comb.attack_bonus));
                 }
                 self.msg(&to, &st)?;
@@ -978,7 +1075,7 @@ impl Conn {
             &["findmons", id] => {
                 let id = format!("%{}%", id.to_lowercase());
                 let mons = mdsl::monsters.filter(lower(mdsl::name).like(id))
-                    .load::<Monster>(&self.db)?;
+                    .load::<Monster>(&*self.db.borrow())?;
                 if mons.len() == 0 {
                     bail!("No results found.");
                 }
@@ -995,7 +1092,7 @@ impl Conn {
             &["findspells", id] => {
                 let id = format!("%{}%", id.to_lowercase());
                 let mons = sdsl::spells.filter(lower(sdsl::name).like(id))
-                    .load::<Spell>(&self.db)?;
+                    .load::<Spell>(&*self.db.borrow())?;
                 if mons.len() == 0 {
                     bail!("No results found.");
                 }
@@ -1035,7 +1132,7 @@ impl Conn {
             },
             &["players"] => {
                 let players = pdsl::players.order(pdsl::id.desc())
-                    .load::<Player>(&self.db)?;
+                    .load::<Player>(&*self.db.borrow())?;
                 let mut st = String::new();
                 for p in players {
                     if st != "" {
@@ -1065,7 +1162,7 @@ impl Conn {
                     player_id: None
                 };
                 let x = format!("Result: {:?}", diesel::insert(&nm).into(schema::combatants::table)
-                                .execute(&self.db));
+                                .execute(&*self.db.borrow()));
                 self.msg(to, &x)?;
             },
             &["atk=", id, attack] => {
@@ -1074,7 +1171,7 @@ impl Conn {
                 let comb = self.query_combatant(id)?;
                 let x = diesel::update(cdsl::combatants.filter(cdsl::id.eq(comb.id)))
                     .set(cdsl::attack.eq(attack))
-                    .get_result::<Combatant>(&self.db)?;
+                    .get_result::<Combatant>(&*self.db.borrow())?;
                 self.msg(to, &format!("{}'s new attack: {}", x.name, x.attack))?;
             },
             &[a @ "hp", id, val] | &[a @ "hp=", id, val] => {
@@ -1086,7 +1183,7 @@ impl Conn {
                 }
                 let x = diesel::update(cdsl::combatants.filter(cdsl::id.eq(comb.id)))
                     .set(cdsl::cur_hp.eq(val))
-                    .get_result::<Combatant>(&self.db)?;
+                    .get_result::<Combatant>(&*self.db.borrow())?;
                 let st = self.print_combatant(&x, true);
                 self.msg(&to, &st)?;
             },
@@ -1115,7 +1212,7 @@ impl Conn {
     }
     fn on_new_msg(&mut self, nick: &str, to: &str, mut msg: String) {
         println!("<{}> to {}: {}", nick, to, msg);
-        if nick == self.client.user_id() { return; }
+        if nick == self.client.borrow().user_id() { return; }
         if msg.len() < 1 { return; }
         if msg.chars().nth(0).unwrap() == ',' {
             msg.remove(0);
@@ -1130,7 +1227,7 @@ impl Conn {
         }
     }
     fn main(&mut self) -> Result<()> {
-        let sync = self.client.sync(10000)?;
+        let sync = self.client.borrow_mut().sync(10000)?;
         for (rid, room) in sync.rooms.join {
             for event in room.timeline.events {
                 match event.content {
@@ -1141,7 +1238,7 @@ impl Conn {
                     },
                     _ => {}
                 }
-                self.client.read_receipt(&rid, &event.event_id)?;
+                self.client.borrow_mut().read_receipt(&rid, &event.event_id)?;
             }
         }
         Ok(())
@@ -1156,19 +1253,28 @@ fn main() {
     let password = env::var("PASSWORD").expect("set the password variable");
     let admin = env::var("ADMIN").expect("set the admin variable");
     println!("[+] Establishing a database connection");
-    let connection = establish_connection();
+    let connection = Rc::new(RefCell::new(establish_connection()));
     println!("[+] Establishing a Matrix connection");
-    let mut client = MatrixClient::login(&username, &password, &server).unwrap();
+    let client = Rc::new(RefCell::new(MatrixClient::login(&username, &password, &server).unwrap()));
+    println!("[+] Initialising Ketos scripting environment");
+    let interp = Interpreter::new();
+    ketos_fn!{ interp.scope() => "roll" => fn k_roll_dice(spec: &str) -> i64 }
+    scripts::register_players(interp.scope());
+    scripts::register_matrix(interp.scope(), client.clone());
+    interp.scope().add_named_value("db", ketos::Value::Foreign(Rc::new(scripts::Database {
+        inner: connection.clone()
+    })));
     println!("[+] Performing initial sync");
-    client.sync(0).unwrap();
+    client.borrow_mut().sync(0).unwrap();
     println!("[+] Setting online status");
-    client.update_presence(Presence::Online).unwrap();
+    client.borrow_mut().update_presence(Presence::Online).unwrap();
     println!("[+] Starting event loop!");
     let mut conn = Conn {
         client: client,
         last_roll: None,
         db: connection,
         admin: admin,
+        interp: interp,
         cur_combatant: None,
         cur_room: None
     };

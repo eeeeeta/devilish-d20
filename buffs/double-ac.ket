@@ -1,0 +1,18 @@
+(define (buff to id)
+  (do
+      (define old-ac (players-get-armor_class db id))
+      (define new-ac (* old-ac 2))
+    (define name (players-get-name db id))
+    (players-set-armor_class db id new-ac)
+
+    (msg mx to (format "~a's AC magically doubles from ~a to ~a!" name old-ac new-ac))
+    ))
+(define (debuff to id)
+  (do
+      (define old-ac (players-get-armor_class db id))
+      (define new-ac (/ old-ac 2))
+    (define name (players-get-name db id))
+    (players-set-armor_class db id new-ac)
+    (msg mx to (format "~a's AC returns from ~a to its normal value of ~a." name old-ac new-ac))
+    ))
+

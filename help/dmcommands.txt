@@ -38,6 +38,14 @@
 # MONSTERS
 - mabis/[monster]: view a monster's abilities
 
+# KETOS
+- ketos/eval/[script]: evaluate the script, and run the function custom with the room name as argument
+- ketos/player/[player]/[script]: evaluate the script, and run `custom` with `room_name, player_id` as arguments
+
+# BUFFS
+- buff/add/[player]/[name]: buff a player with a buff
+- buff/remove/[player]/[name]: remove a buff from a player
+
 # ARBITRARY
 - sql/[SQL]: run some arbitrary SQL command
 - join/[roomid]: make the bot join a room

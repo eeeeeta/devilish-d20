@@ -1,0 +1,4 @@
+Ketos is the scripting language that devilish_d20 uses.
+Further helpfiles: kfunctions, kmodules, koperators, kreadme, kstring.
+Start with kreadme (warning, long wall'o'text!).
+

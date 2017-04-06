@@ -36,7 +36,7 @@ pub struct NewMonster {
     #[serde(default)]
     pub room_id: Vec<i32>,
 }
-#[derive(Queryable)]
+#[derive(Queryable, Serialize, Deserialize, Debug, AsChangeset)]
 pub struct Player {
     pub id: i32,
     pub name: String,
@@ -50,7 +50,8 @@ pub struct Player {
     pub constitution: i32,
     pub wisdom: i32,
     pub charisma: i32,
-    pub initiative_bonus: i32
+    pub initiative_bonus: i32,
+    pub buffs: Vec<String>
 }
 #[derive(Insertable, Serialize, Deserialize)]
 #[table_name="players"]
