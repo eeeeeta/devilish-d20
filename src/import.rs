@@ -1,5 +1,5 @@
 use super::schema::monsters;
-use super::models::{NewItem, NewRoom, NewAbility, NewPlayer, NewMonster};
+use super::models::{NewItem, NewRoom, NewAbility, NewPlayer, NewMonster, NewBuff};
 #[derive(Serialize, Deserialize)]
 pub struct Weapon {
     pub name: String,
@@ -25,7 +25,9 @@ pub struct Datafile {
     #[serde(default)]
     pub monsters: Vec<NewMonster>,
     #[serde(default)]
-    pub weapons: Vec<Weapon>
+    pub weapons: Vec<Weapon>,
+    #[serde(default)]
+    pub buffs: Vec<NewBuff>
 }
 #[derive(Serialize, Deserialize)]
 pub struct MonsterAbility {

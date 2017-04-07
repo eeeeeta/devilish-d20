@@ -70,6 +70,7 @@ use schema::players::dsl as pdsl;
 use schema::rooms::dsl as rdsl;
 use schema::items::dsl as idsl;
 use schema::spells::dsl as sdsl;
+use schema::buffs::dsl as bdsl;
 use models::*;
 use models::Room;
 
@@ -175,7 +176,7 @@ impl Conn {
         self.msg(&to, "Parsing datafile...")?;
         let df: Datafile = serde_json::from_str(&contents)?;
         self.msg(&to, "Inserting data into database...")?;
-        let Datafile { mut items, rooms, mut abilities, players, monsters, weapons } = df;
+        let Datafile { mut items, rooms, mut abilities, players, monsters, weapons, buffs } = df;
         for wpn in weapons {
             let Weapon { name, descrip, qty, player_id, damage_dice, attack_bonus } = wpn;
             abilities.push(NewAbility {
@@ -201,7 +202,9 @@ impl Conn {
             .execute(&*self.db.borrow())?;
         let n_monsters = diesel::insert(&monsters).into(schema::monsters::table)
             .execute(&*self.db.borrow())?;
-        self.msg(&to, &format!("Inserted {} item(s), {} room(s), {} abilities, {} player(s) and {} monster(s).", n_items, n_rooms, n_abilities, n_players, n_monsters))?;
+        let n_buffs = diesel::insert(&buffs).into(schema::buffs::table)
+            .execute(&*self.db.borrow())?;
+        self.msg(&to, &format!("Inserted {} item(s), {} room(s), {} abilities, {} player(s), {} buff(s) and {} monster(s).", n_items, n_rooms, n_abilities, n_players, n_buffs, n_monsters))?;
         Ok(())
     }
     fn load_mons(&mut self, to: &str) -> Result<usize> {
@@ -568,6 +571,12 @@ impl Conn {
             .get_result::<Combatant>(&*self.db.borrow())?;
         Ok(item)
     }
+    fn query_buff(&mut self, id: &str) -> Result<Buff> {
+        let id = format!("%{}%", id.to_lowercase());
+        let item = bdsl::buffs.filter(lower(bdsl::name).like(id))
+            .get_result::<Buff>(&*self.db.borrow())?;
+        Ok(item)
+    }
     fn query_player(&mut self, id: &str) -> Result<Player> {
         let id = format!("%{}%", id.to_lowercase());
         let item = pdsl::players.filter(lower(pdsl::name).like(id))
@@ -666,8 +675,8 @@ impl Conn {
         Ok(format!("It's now {}'s turn.\n{}", ret.name, self.describe_turn_options()?))
     }
     fn load_buff(&mut self, name: &str) -> Result<()> {
-        let path = format!("buffs/{}.ket", name);
-        self.interp.run_file(::std::path::Path::new(&path)).map_err(|e| self.interp.format_error(&e))?;
+        let buff = self.query_buff(name)?;
+        self.interp.run_single_expr(&buff.code, None).map_err(|e| self.interp.format_error(&e))?;
         Ok(())
     }
     fn roll_initiative(&mut self) -> Result<String> {
@@ -867,6 +876,11 @@ impl Conn {
                     let st = format!("Return value: {:?}", val);
                     self.msg(&to, &st)?;
                 }
+            },
+            &["buff", "describe", name] => {
+                let buff = self.query_buff(name)?;
+                let st = format!("#{}: <b>{}</b>\n{}", buff.id, buff.name, buff.descrip);
+                self.msg(&to, &st)?;
             },
             &["buff", "add", player, name] => {
                 self.check_admin(nick)?;

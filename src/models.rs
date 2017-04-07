@@ -1,4 +1,4 @@
-use super::schema::{combatants, monsters, abilities, items, rooms, players, props, spells};
+use super::schema::{combatants, monsters, abilities, items, rooms, players, props, spells, buffs};
 
 pub fn default_qty() -> i32 {
     1
@@ -201,4 +201,18 @@ pub struct NewSpell {
     pub duration: String,
     #[serde(rename = "description", default)]
     pub descrip: String
+}
+#[derive(Queryable)]
+pub struct Buff {
+    pub id: i32,
+    pub name: String,
+    pub descrip: String,
+    pub code: String
+}
+#[derive(Insertable, Serialize, Deserialize)]
+#[table_name="buffs"]
+pub struct NewBuff {
+    pub name: String,
+    pub descrip: String,
+    pub code: String
 }
